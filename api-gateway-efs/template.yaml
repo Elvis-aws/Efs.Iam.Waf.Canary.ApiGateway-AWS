@@ -75,7 +75,7 @@ Resources:
       - MountTargetA
       - MountTargetB
     Properties:
-      CodeUri: hello_efs/
+      CodeUri: src/
       Handler: app.lambda_handler
       Runtime: python3.8
       Architectures:
