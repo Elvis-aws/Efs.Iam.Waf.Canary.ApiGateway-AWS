@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Uses Kinesis Firehose to fanout SNS notifications to S3 and Glue
+
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.9
+    Tracing: Active
+
+  Api:
+    TracingEnabled: True
+
+Resources:
+############################################
+########### SNS LAMBDA FUNCTION ############
+############################################
+  LambdaFunctionProd:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: LambdaFunctionProd
+      CodeUri: src/
+      Handler: app.lambda_prod
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - CloudWatchFullAccess
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /lambdaprod
+            Method: get
+
+  LambdaFunctionProdVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref LambdaFunctionProd
+      Description: V1
+
+  AliasLambdaFunctionProd:
+    Type: AWS::Lambda::Alias
+    DependsOn: LambdaFunctionProd
+    Properties:
+      FunctionName: !Ref LambdaFunctionProd
+      FunctionVersion: !GetAtt LambdaFunctionProdVersion.Version
+      Name: BLUE
+
+  LambdaFunctionCanary:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: LambdaFunctionCanary
+      CodeUri: src/
+      Handler: app.lambda_canary
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - CloudWatchFullAccess
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /lambdacanary
+            Method: get
+
+  LambdaFunctionGetVersion1:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref LambdaFunctionCanary
+      Description: V1
+
+  AliasLambdaFunctionGet1:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref LambdaFunctionCanary
+      FunctionVersion: !GetAtt LambdaFunctionGetVersion1.Version
+      Name: GREEN
+############################################
+############### LAMBDA ROLE ################
+############################################
+
+  LambdaLogGroupProd:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LambdaFunctionProd}
+      RetentionInDays: 3
+  LambdaLogStreamProd:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref LambdaLogGroupProd
+      LogStreamName: !Ref LambdaFunctionProd
+
+  LambdaLogGroupCanary:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LambdaFunctionCanary}
+      RetentionInDays: 3
+  LambdaLogStreamCanary:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref LambdaLogGroupCanary
+      LogStreamName: !Ref LambdaFunctionCanary
+
+############################################
+######## AD API GATEWAY RESOURCES ##########
+
+############################################
+######### API GATEWAY API RESOURCE #########
+############################################
+  RestApiProd:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: RestApiProd
+      ApiKeySourceType: HEADER
+      Description: An API Gateway with a Lambda Integration
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  RestApiCanary:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: RestApiCanary
+      ApiKeySourceType: HEADER
+      Description: An API Gateway with a Lambda Integration
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  ############################################
+  ########## API GATEWAY RESOURCE ############
+  ############################################
+  ApiGatewayResourceProd:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt RestApiProd.RootResourceId
+      PathPart: lambda
+      RestApiId: !Ref RestApiProd
+  ApiGatewayResourceCanary:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt RestApiCanary.RootResourceId
+      PathPart: lambda
+      RestApiId: !Ref RestApiCanary
+  ############################################
+  ######### API GATEWAY METHOD GET ##########
+  ############################################
+  ApiGatewayMethodProd:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionProd.Arn}/invocations
+      OperationName: lambdaprod
+      ResourceId: !Ref ApiGatewayResourceProd
+      RestApiId: !Ref RestApiProd
+
+  ApiGatewayMethodCanary:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionCanary.Arn}/invocations
+      OperationName: lambdacanary
+      ResourceId: !Ref ApiGatewayResourceCanary
+      RestApiId: !Ref RestApiCanary
+  ############################################
+  ###### API GATEWAY DEPLOYMENT PROD #########
+  ############################################
+  ProdDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethodProd
+    Properties:
+      RestApiId: !Ref RestApiProd
+      StageName: production
+      StageDescription:
+        Variables:
+          prod_variable: This is stage variable for prod
+  ############################################
+  ##### API GATEWAY DEPLOYMENT CANARY ########
+  ############################################
+  CanaryDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethodCanary
+    Properties:
+      RestApiId: !Ref RestApiCanary
+      StageName: canary
+      StageDescription:
+        Variables:
+          TrafficPercentage: 10 # Adjust the percentage as desired
+          canary_variable: This is stage variable for canary
+  ############################################
+  ## API GATEWAY DEPLOYMENT CANARY CONFIG ####
+  ############################################
+  ApiGatewayCanaryDeploymentConfig:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethodCanary
+    Properties:
+      Description: Lambda API Deployment
+      RestApiId: !Ref RestApiCanary
+      StageName: Canary
+      StageDescription:
+        CacheClusterEnabled: True
+        CacheClusterSize: 1.6
+        CacheTtlInSeconds: 10
+        CachingEnabled: True
+        CanarySetting:
+          PercentTraffic: 10
+          StageVariableOverrides:
+            TrafficPercentage: 50 # Adjust the percentage as desired
+        DataTraceEnabled: True
+        Description: Canary testing
+        LoggingLevel: INFO
+  ############################################
+  ############### API GATEWAY ################
+  ############################################
+  ApiGatewayIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: lambda:*
+                Resource:
+                  - !GetAtt LambdaFunctionProd.Arn
+                  - !GetAtt LambdaFunctionCanary.Arn
+  ############################################
+  ################## OUT PUT #################
+  ############################################
+Outputs:
+  ProdUrl:
+    Description: URL for Prod endpoint
+    Value: !Sub "https://${RestApiProd}.execute-api.${AWS::Region}.amazonaws.com/production"
+  CanaryUrl:
+    Description: URL for Canary endpoint
+    Value: !Sub "https://${RestApiCanary}.execute-api.${AWS::Region}.amazonaws.com/canary"
+  ###############################################

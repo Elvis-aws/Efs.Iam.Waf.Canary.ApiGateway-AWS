@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless patterns - Amazon API Gateway REST API with docs-iam authorizer
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.9
+    Tracing: Active
+  Api:
+    TracingEnabled: true
+Resources:
+  AuthorizedUser:
+    Type: AWS::IAM::User
+    Properties:
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: execute-api:Invoke
+            Resource:
+              Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AppApi}/Prod/*
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource:
+              Fn::GetAtt:
+              - AppFunction
+              - Arn
+  UnauthorizedUser:
+    Type: AWS::IAM::User
+    Properties:
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: execute-api:Invoke
+            Resource:
+              Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*
+  AppApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Description: docs-iam authorizer REST API demo
+      StageName: Prod
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+  AppFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: AppFunction
+      Handler: app.lambda_handler
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: AppApi
+            Path: /lambda
+            Method: get
+    Metadata:
+      SamResourceId: AppFunction
+Outputs:
+  AppApiEndpoint:
+    Description: API Endpoint
+    Value:
+      Fn::Sub: https://${AppApi}.execute-api.${AWS::Region}.amazonaws.com/Prod
+  AuthorizedUserUsername:
+    Description: Username for authorized user
+    Value:
+      Ref: AuthorizedUser
+  UnauthorizedUser:
+    Description: Username for unauthorized user
+    Value:
+      Ref: UnauthorizedUser
