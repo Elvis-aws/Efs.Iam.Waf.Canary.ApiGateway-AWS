@@ -1,0 +1,273 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "My API Gateway and Lambda function"
+
+Parameters:
+  apiGatewayStageName:
+    Type: "String"
+    AllowedPattern: "^[a-z0-9]+$"
+    Default: "samplesample"
+  Role:
+    Type: String
+    Default: arn:aws:iam::accountid:role/Fincockpit_AuroraServerless
+    Description: ''
+  SecurityGroupIds:
+    Default: "sgid"
+    Description: ""
+    Type: CommaDelimitedList
+  SubnetIds:
+    Default: "subnet"
+    Description: ""
+    Type: CommaDelimitedList
+  Policies:
+    Type: CommaDelimitedList
+    Default: AWSLambdaFullAccess,AmazonRDSFullAccess,AmazonEC2FullAccess,AmazonDynamoDBFullAccess,AmazonVPCFullAccess
+    Description: ''
+  CodeZip:
+    Type: String
+    Description: SAMPLE API Build Package
+  RedisCacheEndpoint:
+    Type: String
+    Default: 'redisendpoint'
+  Environment:
+    Type: String
+    Default: sample
+  S3Bucket:
+    Type: String
+    Default: s3-changeme-api-sample
+  # AliasName:
+    # Type: String
+    # Default: stagename
+  FunctionVersion:
+    Type: String
+    Default: commitid
+
+Resources:
+  apiGateway:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: "StackchangemeapisampleNewPOC"
+      Description: "SAMPLE New Template API"
+
+  apiGatewayResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      ParentId: !GetAtt
+            - apiGateway
+            - RootResourceId
+      PathPart: "MyFunction"
+      RestApiId: !Ref "apiGateway"
+
+  ApiAuthorizer:
+      Type: "AWS::ApiGateway::Authorizer"
+      Properties:
+        AuthorizerResultTtlInSeconds: 300
+        IdentitySource: method.request.header.Authorization
+        Name: CognitoDefaultUserPoolAuthorizer
+        ProviderARNs:
+          - arn:aws:cognito-idp:ap-south-1:accountid:userpool/poolid
+        RestApiId: !Ref apiGateway
+        Type: "COGNITO_USER_POOLS"
+
+  apiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref "apiGateway"
+      StageName: changemesample
+      TracingEnabled: Yes
+      DeploymentId: !Ref "apiGatewayDeployment"
+      Variables:
+        ClientMaster: ClientMaster_sample
+        UserMaster: UserMaster_sample
+        RedisCacheEndpoint: !Ref RedisCacheEndpoint
+        UserClientMapping: UserClientMapping_sample
+        lambdaAlias: sample
+
+  apiGatewayStage1:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref "apiGateway"
+      StageName: changemetest
+      TracingEnabled: Yes
+      DeploymentId: !Ref "apiGatewayDeployment"
+      Variables:
+        ClientMaster: ClientMaster_test
+        UserMaster: UserMaster_ctest
+        RedisCacheEndpoint: "sample-redis-test.hreh1d.ng.0001.aps1.cache.amazonaws.com:6379"
+        UserClientMapping: UserClientMapping_test
+        lambdaAlias: test
+
+  apiGatewayStage2:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref "apiGateway"
+      StageName: samplestage
+      TracingEnabled: Yes
+      DeploymentId: !Ref "apiGatewayDeployment"
+      Variables:
+        ClientMaster: ClientMaster_stage
+        UserMaster: UserMaster_stage
+        RedisCacheEndpoint: "sample-redis-stage.hreh1d.ng.0001.aps1.cache.amazonaws.com:6379"
+        UserClientMapping: UserClientMapping_stage
+        lambdaAlias: stage
+
+  apiGatewayRootMethod:
+    DependsOn: [
+      MyFunctionlambdaApiGatewayInvokeDev,
+      MyFunctionlambdaApiGatewayInvokeTest,
+      MyFunctionlambdaApiGatewayInvokeStage]
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: "COGNITO_USER_POOLS"
+      AuthorizerId: !Ref ApiAuthorizer
+      HttpMethod: POST
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}:${!stageVariables.lambdaAlias}/invocations"
+          - lambdaArn: !GetAtt "MyFunction.Arn"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: ''
+            ResponseParameters:
+                method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+                method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: $input.json('$')
+      RequestParameters:
+        method.request.querystring.name: false
+      ResourceId: !Ref "apiGatewayResource"
+      RestApiId: !Ref apiGateway
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+  apiGatewayCORSOptionMethod:
+      Type: "AWS::ApiGateway::Method"
+      Properties:
+        ResourceId: !Ref apiGatewayResource
+        RestApiId: !Ref apiGateway
+        AuthorizationType: NONE
+        HttpMethod: OPTIONS
+        Integration:
+          Type: MOCK
+          IntegrationResponses:
+            - ResponseParameters:
+                method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+                method.response.header.Access-Control-Allow-Origin: "'*'"
+              ResponseTemplates:
+                application/json: ''
+              StatusCode: '200'
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            application/json: '{"statusCode": 200}'
+        MethodResponses:
+          - ResponseModels:
+              application/json: Empty
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: true
+              method.response.header.Access-Control-Allow-Methods: true
+              method.response.header.Access-Control-Allow-Origin: true
+            StatusCode: '200'
+
+  apiGatewayDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn: apiGatewayRootMethod
+    # DependsOn: [
+      # apiGatewayRootMethod,
+      # GetRightMenuapiGatewayRootMethod,
+      # GetAreaapiGatewayRootMethod,
+      # ResetRedisCacheapiGatewayRootMethod,
+      # # GetChartsByUseCaseIDapiGatewayRootMethod,
+      # ShowUserClientMappingsapiGatewayRootMethod,
+      # GetChartKPIValuesapiGatewayRootMethod,
+      # GetChartUseCaseMappingsapiGatewayRootMethod]
+    Properties:
+      RestApiId: !Ref "apiGateway"
+      # StageName: !Ref "apiGatewayStageName"
+
+
+  MyFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: PwC.SAMPLE.Lambda::PwC.SAMPLE.Lambda.Functions.Common.MyFunction::Run
+      FunctionName: MyFunction_LambdaName
+      Runtime: dotnetcore2.1
+      Code:
+        S3Bucket: "s3-sample-api-sample"
+        S3Key: !Ref "CodeZip"
+      MemorySize: 512
+      Timeout: 30
+      Role:
+        Ref: Role
+      VpcConfig:
+        SecurityGroupIds:
+          Ref: SecurityGroupIds
+        SubnetIds:
+          Ref: SubnetIds
+
+  MyFunctionVersion:
+    DeletionPolicy: Retain
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName:
+        Ref: MyFunction
+
+  MyFunctionAliasDev:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName:
+        Ref: MyFunction
+      FunctionVersion:
+        Fn::GetAtt:
+        - MyFunctionVersion
+        - Version
+      Name: dev
+
+  MyFunctionAliasTest:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName:
+        Ref: MyFunction
+      FunctionVersion: testversion
+      Name: test
+
+  MyFunctionAliasStage:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName:
+        Ref: MyFunction
+      FunctionVersion: stageversion
+      Name: stage
+
+  MyFunctionlambdaApiGatewayInvokeDev:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref "MyFunctionAliasDev"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/POST/MyFunction"
+
+  MyFunctionlambdaApiGatewayInvokeTest:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref "MyFunctionAliasTest"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/POST/MyFunction"
+
+  MyFunctionlambdaApiGatewayInvokeStage:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref "MyFunctionAliasStage"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/POST/MyFunction"

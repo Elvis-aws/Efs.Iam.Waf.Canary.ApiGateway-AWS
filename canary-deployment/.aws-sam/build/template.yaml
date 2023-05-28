@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Transform: AWS::Serverless-2016-10-31
-Description: Uses Kinesis Firehose to fanout SNS notifications to S3 and Glue
+Description: Lambda Alias and stageVariables
 Globals:
   Function:
     Timeout: 30
@@ -31,11 +31,12 @@ Resources:
         ApiEvent:
           Type: Api
           Properties:
-            Path: /lambdaprod
+            Path: /
             Method: get
     Metadata:
       SamResourceId: LambdaFunctionProd
-  LambdaFunctionProdVersion:
+  LambdaVersion1:
+    DeletionPolicy: Delete
     Type: AWS::Lambda::Version
     Properties:
       FunctionName:
@@ -49,50 +50,19 @@ Resources:
         Ref: LambdaFunctionProd
       FunctionVersion:
         Fn::GetAtt:
-        - LambdaFunctionProdVersion
+        - LambdaVersion1
         - Version
-      Name: BLUE
-  LambdaFunctionCanary:
-    Type: AWS::Serverless::Function
+      Name: prodAlias
+  LambdaFunctionProdaApiGatewayInvokeProd:
+    Type: AWS::Lambda::Permission
+    DependsOn: AliasLambdaFunctionProd
     Properties:
-      FunctionName: LambdaFunctionCanary
-      CodeUri: LambdaFunctionCanary
-      Handler: app.lambda_canary
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Action:
-          - sts:AssumeRole
-          Effect: Allow
-          Principal:
-            Service:
-            - lambda.amazonaws.com
-      Policies:
-      - CloudWatchFullAccess
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            Path: /lambdacanary
-            Method: get
-    Metadata:
-      SamResourceId: LambdaFunctionCanary
-  LambdaFunctionGetVersion1:
-    Type: AWS::Lambda::Version
-    Properties:
+      Action: lambda:InvokeFunction
       FunctionName:
-        Ref: LambdaFunctionCanary
-      Description: V1
-  AliasLambdaFunctionGet1:
-    Type: AWS::Lambda::Alias
-    Properties:
-      FunctionName:
-        Ref: LambdaFunctionCanary
-      FunctionVersion:
-        Fn::GetAtt:
-        - LambdaFunctionGetVersion1
-        - Version
-      Name: GREEN
+        Fn::Sub: ${LambdaFunctionProd.Arn}:prodAlias
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/*/GET/*
   LambdaLogGroupProd:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -106,32 +76,10 @@ Resources:
         Ref: LambdaLogGroupProd
       LogStreamName:
         Ref: LambdaFunctionProd
-  LambdaLogGroupCanary:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName:
-        Fn::Sub: /aws/lambda/${LambdaFunctionCanary}
-      RetentionInDays: 3
-  LambdaLogStreamCanary:
-    Type: AWS::Logs::LogStream
-    Properties:
-      LogGroupName:
-        Ref: LambdaLogGroupCanary
-      LogStreamName:
-        Ref: LambdaFunctionCanary
   RestApiProd:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: RestApiProd
-      ApiKeySourceType: HEADER
-      Description: An API Gateway with a Lambda Integration
-      EndpointConfiguration:
-        Types:
-        - EDGE
-  RestApiCanary:
-    Type: AWS::ApiGateway::RestApi
-    Properties:
-      Name: RestApiCanary
       ApiKeySourceType: HEADER
       Description: An API Gateway with a Lambda Integration
       EndpointConfiguration:
@@ -147,16 +95,6 @@ Resources:
       PathPart: lambda
       RestApiId:
         Ref: RestApiProd
-  ApiGatewayResourceCanary:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      ParentId:
-        Fn::GetAtt:
-        - RestApiCanary
-        - RootResourceId
-      PathPart: lambda
-      RestApiId:
-        Ref: RestApiCanary
   ApiGatewayMethodProd:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -174,76 +112,41 @@ Resources:
         TimeoutInMillis: 29000
         Type: AWS_PROXY
         Uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionProd.Arn}/invocations
+          Fn::Sub:
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}:${!stageVariables.lambdaAlias}/invocations
+          - lambdaArn:
+              Fn::GetAtt:
+              - LambdaFunctionProd
+              - Arn
       OperationName: lambdaprod
       ResourceId:
         Ref: ApiGatewayResourceProd
       RestApiId:
         Ref: RestApiProd
-  ApiGatewayMethodCanary:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      ApiKeyRequired: false
-      AuthorizationType: NONE
-      HttpMethod: ANY
-      Integration:
-        ConnectionType: INTERNET
-        Credentials:
-          Fn::GetAtt:
-          - ApiGatewayIamRole
-          - Arn
-        IntegrationHttpMethod: POST
-        PassthroughBehavior: WHEN_NO_MATCH
-        TimeoutInMillis: 29000
-        Type: AWS_PROXY
-        Uri:
-          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionCanary.Arn}/invocations
-      OperationName: lambdacanary
-      ResourceId:
-        Ref: ApiGatewayResourceCanary
-      RestApiId:
-        Ref: RestApiCanary
   ProdDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn: ApiGatewayMethodProd
     Properties:
       RestApiId:
         Ref: RestApiProd
+      Description: Production deployment
+  Prod:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId:
+        Ref: ProdDeployment
       StageName: production
-      StageDescription:
-        Variables:
-          prod_variable: This is stage variable for prod
-  CanaryDeployment:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn: ApiGatewayMethodCanary
-    Properties:
+      Description: Prod Stage
       RestApiId:
-        Ref: RestApiCanary
-      StageName: canary
-      StageDescription:
-        Variables:
-          TrafficPercentage: 10
-          canary_variable: This is stage variable for canary
-  ApiGatewayCanaryDeploymentConfig:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn: ApiGatewayMethodCanary
-    Properties:
-      Description: Lambda API Deployment
-      RestApiId:
-        Ref: RestApiCanary
-      StageName: Canary
-      StageDescription:
-        CacheClusterEnabled: true
-        CacheClusterSize: 1.6
-        CacheTtlInSeconds: 10
-        CachingEnabled: true
-        CanarySetting:
-          PercentTraffic: 10
-          StageVariableOverrides:
-            TrafficPercentage: 50
-        DataTraceEnabled: true
-        Description: Canary testing
-        LoggingLevel: INFO
+        Ref: RestApiProd
+      Variables:
+        lambdaAlias: prodAlias
+        prod_variable: This is stage variable for prod
+      MethodSettings:
+      - ResourcePath: /lambda
+        HttpMethod: GET
+        MetricsEnabled: 'true'
+        DataTraceEnabled: 'false'
   ApiGatewayIamRole:
     Type: AWS::IAM::Role
     Properties:
@@ -269,15 +172,8 @@ Resources:
             - Fn::GetAtt:
               - LambdaFunctionProd
               - Arn
-            - Fn::GetAtt:
-              - LambdaFunctionCanary
-              - Arn
 Outputs:
   ProdUrl:
     Description: URL for Prod endpoint
     Value:
       Fn::Sub: https://${RestApiProd}.execute-api.${AWS::Region}.amazonaws.com/production
-  CanaryUrl:
-    Description: URL for Canary endpoint
-    Value:
-      Fn::Sub: https://${RestApiCanary}.execute-api.${AWS::Region}.amazonaws.com/canary

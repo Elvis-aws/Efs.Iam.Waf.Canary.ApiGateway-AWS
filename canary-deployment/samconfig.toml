@@ -2,9 +2,9 @@ version = 0.1
 [default]
 [default.deploy]
 [default.deploy.parameters]
-stack_name = "canary-app"
+stack_name = "alias-app"
 s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1cixq0vp7d4xn"
-s3_prefix = "canary-app"
+s3_prefix = "alias-app"
 region = "eu-west-2"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
