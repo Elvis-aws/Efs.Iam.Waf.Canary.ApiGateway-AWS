@@ -7,6 +7,7 @@ def lambda_canary(event, context):
     variable = stage_variables['canary_variable']
     return {
         "statusCode": 200,
+        'headers': {'Content-Type': 'application/json'},
         "body": json.dumps({
             "message": "This is Canary deployment Testing",
             "messages": "This is another version",
@@ -22,6 +23,7 @@ def lambda_prod(event, context):
         variable = stage_variables['prod_variable']
         return {
             "statusCode": 200,
+            'headers': {'Content-Type': 'application/json'},
             "body": json.dumps({
                 "message": "This is Prod deployment Testing",
                 "messages": "This is version 1 of my function",
@@ -36,3 +38,21 @@ def lambda_prod(event, context):
         }
 
 
+def lambda_pre_canary(event, context):
+    return {
+        "statusCode": 200,
+        'headers': {'Content-Type': 'application/json'},
+        "body": json.dumps({
+            "message": "Canary deployment Started",
+        }),
+    }
+
+
+def lambda_post_canary(event, context):
+    return {
+        "statusCode": 200,
+        'headers': {'Content-Type': 'application/json'},
+        "body": json.dumps({
+            "message": "Canary deployment Ended",
+        }),
+    }

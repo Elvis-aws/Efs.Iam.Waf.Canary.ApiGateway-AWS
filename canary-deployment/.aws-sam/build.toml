@@ -8,6 +8,6 @@ architecture = "x86_64"
 handler = "app.lambda_prod"
 manifest_hash = ""
 packagetype = "Zip"
-functions = ["LambdaFunctionProd"]
+functions = ["LambdaFunctionProd", "TokenAuthorizerFunction"]
 
 [layer_build_definitions]

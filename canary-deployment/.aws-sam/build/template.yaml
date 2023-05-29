@@ -26,62 +26,66 @@ Resources:
             Service:
             - lambda.amazonaws.com
       Policies:
-      - CloudWatchFullAccess
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            Path: /
-            Method: get
+      - AWSLambda_FullAccess
+      AutoPublishAlias: live
     Metadata:
       SamResourceId: LambdaFunctionProd
-  LambdaVersion1:
-    DeletionPolicy: Delete
-    Type: AWS::Lambda::Version
+  TokenAuthorizerFunction:
+    Type: AWS::Serverless::Function
     Properties:
-      FunctionName:
-        Ref: LambdaFunctionProd
-      Description: V1
-  AliasLambdaFunctionProd:
-    Type: AWS::Lambda::Alias
-    DependsOn: LambdaFunctionProd
+      FunctionName: TokenAuthorizerFunction
+      CodeUri: TokenAuthorizerFunction
+      Handler: app.authorize
+    Metadata:
+      SamResourceId: TokenAuthorizerFunction
+  AuthorizersLambdaToken:
+    Type: AWS::ApiGateway::Authorizer
     Properties:
-      FunctionName:
-        Ref: LambdaFunctionProd
-      FunctionVersion:
-        Fn::GetAtt:
-        - LambdaVersion1
-        - Version
-      Name: prodAlias
-  LambdaFunctionProdaApiGatewayInvokeProd:
+      Name: LambdaAuthorizerToken
+      Type: TOKEN
+      RestApiId:
+        Ref: RestApiProd
+      IdentitySource: method.request.header.authorizationToken
+      AuthorizerUri:
+        Fn::Join:
+        - ''
+        - - 'arn:aws:apigateway:'
+          - Ref: AWS::Region
+          - :lambda:path/2015-03-31/functions/
+          - Fn::GetAtt:
+            - TokenAuthorizerFunction
+            - Arn
+          - /invocations
+  AppFunctionPermission:
     Type: AWS::Lambda::Permission
-    DependsOn: AliasLambdaFunctionProd
     Properties:
-      Action: lambda:InvokeFunction
       FunctionName:
-        Fn::Sub: ${LambdaFunctionProd.Arn}:prodAlias
+        Ref: LambdaFunctionProd
+      Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn:
-        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/*/GET/*
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/*/GET/
+  TokenAuthorizerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: TokenAuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/authorizers/${AuthorizersLambdaToken}
   LambdaLogGroupProd:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName:
         Fn::Sub: /aws/lambda/${LambdaFunctionProd}
-      RetentionInDays: 3
-  LambdaLogStreamProd:
-    Type: AWS::Logs::LogStream
-    Properties:
-      LogGroupName:
-        Ref: LambdaLogGroupProd
-      LogStreamName:
-        Ref: LambdaFunctionProd
+      RetentionInDays: 1
   RestApiProd:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: RestApiProd
       ApiKeySourceType: HEADER
-      Description: An API Gateway with a Lambda Integration
+      Description: Lambda Token Authorizer REST API demo
       EndpointConfiguration:
         Types:
         - EDGE
@@ -99,7 +103,9 @@ Resources:
     Type: AWS::ApiGateway::Method
     Properties:
       ApiKeyRequired: false
-      AuthorizationType: NONE
+      AuthorizationType: CUSTOM
+      AuthorizerId:
+        Ref: AuthorizersLambdaToken
       HttpMethod: ANY
       Integration:
         ConnectionType: INTERNET
@@ -112,12 +118,15 @@ Resources:
         TimeoutInMillis: 29000
         Type: AWS_PROXY
         Uri:
-          Fn::Sub:
-          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}:${!stageVariables.lambdaAlias}/invocations
-          - lambdaArn:
-              Fn::GetAtt:
+          Fn::Join:
+          - ''
+          - - 'arn:aws:apigateway:'
+            - Ref: AWS::Region
+            - :lambda:path/2015-03-31/functions/
+            - Fn::GetAtt:
               - LambdaFunctionProd
               - Arn
+            - /invocations
       OperationName: lambdaprod
       ResourceId:
         Ref: ApiGatewayResourceProd
@@ -142,11 +151,6 @@ Resources:
       Variables:
         lambdaAlias: prodAlias
         prod_variable: This is stage variable for prod
-      MethodSettings:
-      - ResourcePath: /lambda
-        HttpMethod: GET
-        MetricsEnabled: 'true'
-        DataTraceEnabled: 'false'
   ApiGatewayIamRole:
     Type: AWS::IAM::Role
     Properties:

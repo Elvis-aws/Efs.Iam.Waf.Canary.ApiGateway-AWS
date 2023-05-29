@@ -13,6 +13,26 @@ Globals:
   Api:
     TracingEnabled: True
 
+Mappings:
+  Deployment:
+    eu-west-2:
+      "Canary30": Canary10Percent30Minutes
+      "Canary5": Canary10Percent5Minutes
+      "Canary10": Canary10Percent10Minutes
+      "Canary15": Canary10Percent15Minutes
+      "Linear10": Linear10PercentEvery10Minutes
+      "Linear1": Linear10PercentEvery1Minute
+      "Linear2": Linear10PercentEvery2Minutes
+      "Linear3": Linear10PercentEvery3Minutes
+      "allAtOnce": AllAtOnce
+
+#We are using the Canary10Percent5Minutes strategy, which means that traffic is shifted in two increments.
+#In the first increment, only 10% of the traffic is shifted to the new Lambda version, and after 5 minutes,
+#the remaining 90% is shifted.
+
+#The Linear strategy means that traffic is shifted in batches every X minutes. For example, Linear10PercentEvery10Minutes
+#will shift an additional 10% of traffic every 10 minutes
+
 Resources:
 ############################################
 ########### SNS LAMBDA FUNCTION ############
@@ -35,44 +55,30 @@ Resources:
       Policies:
         - AWSLambda_FullAccess
       AutoPublishAlias: live
+      DeploymentPreference:
+        Type: !FindInMap [ Deployment, !Ref AWS::Region, Canary5 ]
+        #        Alarms:
+        #          # A list of alarms that you want to monitor
+        #          - !Ref AliasErrorMetricGreaterThanZeroAlarm
+        #          - !Ref LatestVersionErrorMetricGreaterThanZeroAlarm
+        Hooks:
+          # Validation Lambda functions that are run before & after traffic shifting
+          PreTraffic: !Ref PreTrafficLambdaFunction
+          PostTraffic: !Ref PostTrafficLambdaFunction
 
-
-# Authorizer function
-  TokenAuthorizerFunction:
+  PreTrafficLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: TokenAuthorizerFunction
+      FunctionName: PreTrafficLambdaFunction
       CodeUri: src/
-      Handler: app.authorize
+      Handler: app.lambda_pre_canary
 
-# Lambda Token Authorizer
-  AuthorizersLambdaToken:
-    Type: AWS::ApiGateway::Authorizer
+  PostTrafficLambdaFunction:
+    Type: AWS::Serverless::Function
     Properties:
-      Name: LambdaAuthorizerToken
-      Type: TOKEN
-      RestApiId: !Ref RestApiProd
-      IdentitySource: method.request.header.authorizationToken
-      AuthorizerUri: !Join ['', ['arn:aws:apigateway:', !Ref AWS::Region, ':lambda:path/2015-03-31/functions/', !GetAtt TokenAuthorizerFunction.Arn, '/invocations']]
-
-  # Permission to allow Lambda invocation from API Gateway
-  AppFunctionPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref LambdaFunctionProd
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/*/GET/
-
-  # Permission to allow Lambda authorizer invocation from API Gateway
-  TokenAuthorizerFunctionPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref TokenAuthorizerFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/authorizers/${AuthorizersLambdaToken}
-
+      FunctionName: PostTrafficLambdaFunction
+      CodeUri: src/
+      Handler: app.lambda_post_canary
 ############################################
 ############# LAMBDA LOG GROUP #############
 ############################################
@@ -91,7 +97,7 @@ Resources:
     Properties:
       Name: RestApiProd
       ApiKeySourceType: HEADER
-      Description: Lambda Token Authorizer REST API demo
+      Description: An API Gateway with a Lambda Integration
       EndpointConfiguration:
         Types:
           - EDGE
@@ -111,8 +117,7 @@ Resources:
     Type: AWS::ApiGateway::Method
     Properties:
       ApiKeyRequired: false
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref AuthorizersLambdaToken
+      AuthorizationType: NONE
       HttpMethod: ANY
       Integration:
         ConnectionType: INTERNET
@@ -121,8 +126,7 @@ Resources:
         PassthroughBehavior: WHEN_NO_MATCH
         TimeoutInMillis: 29000
         Type: AWS_PROXY
-        Uri: !Join ['', ['arn:aws:apigateway:', !Ref AWS::Region, ':lambda:path/2015-03-31/functions/', !GetAtt LambdaFunctionProd.Arn, '/invocations']]
-#        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionProd.Arn}/invocations
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionProd.Arn}/invocations
       OperationName: lambdaprod
       ResourceId: !Ref ApiGatewayResourceProd
       RestApiId: !Ref RestApiProd
