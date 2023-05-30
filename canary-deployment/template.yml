@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda Alias and stageVariables
+
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.9
+    Tracing: Active
+
+  Api:
+    TracingEnabled: True
+
+Resources:
+############################################
+########### SNS LAMBDA FUNCTION ############
+############################################
+  LambdaFunctionProd:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: LambdaFunctionProd
+      CodeUri: src/
+      Handler: app.lambda_prod
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - AWSLambda_FullAccess
+
+
+# Lambda function Version One
+  LambdaFunctionProdVersionOne:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref LambdaFunctionProd
+      Description: v1
+      ProvisionedConcurrencyConfig:
+        ProvisionedConcurrentExecutions: 20
+
+# Lambda function Version Two
+  LambdaFunctionProdVersionTwo:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref LambdaFunctionProd
+      Description: v2
+      ProvisionedConcurrencyConfig:
+        ProvisionedConcurrentExecutions: 20
+
+# Lambda function Alias
+  AliasLambdaFunctionProd:
+    DependsOn: LambdaFunctionProd
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref LambdaFunctionProd
+      FunctionVersion: !GetAtt LambdaFunctionProdVersionOne.Version
+      Name: ProdAlias
+      RoutingConfig:
+        AdditionalVersionWeights:
+          - FunctionVersion: !GetAtt LambdaFunctionProdVersionTwo.Version
+            FunctionWeight: 0.5
+
+  # Permission to allow Lambda invocation from API Gateway
+  LambdaFunctionProdPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunctionProd
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/*/GET/*
+
+  # Permission to allow Lambda Alias invocation from API Gateway
+  AliasLambdaFunctionProdPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AliasLambdaFunctionProd
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiProd}/*/GET/*
+
+############################################
+############# LAMBDA LOG GROUP #############
+############################################
+
+  LambdaLogGroupProd:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${LambdaFunctionProd}
+      RetentionInDays: 1
+
+############################################
+######### API GATEWAY API RESOURCE #########
+############################################
+  RestApiProd:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: RestApiProd
+      ApiKeySourceType: HEADER
+      Description: Lambda Token Authorizer REST API demo
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  ############################################
+  ########## API GATEWAY RESOURCE ############
+  ############################################
+  ApiGatewayResourceProd:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt RestApiProd.RootResourceId
+      PathPart: lambda
+      RestApiId: !Ref RestApiProd
+  ############################################
+  ######### API GATEWAY METHOD GET ##########
+  ############################################
+  ApiGatewayMethodProd:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}:${!stageVariables.lambdaAlias}/invocations"
+          - lambdaArn: !GetAtt LambdaFunctionProd.Arn
+#        Uri: !Join ['', ['arn:aws:apigateway:', !Ref AWS::Region, ':lambda:path/2015-03-31/functions/', !GetAtt LambdaFunctionProd.Arn, '/invocations']]
+#        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionProd.Arn}/invocations
+      OperationName: lambdaprod
+      ResourceId: !Ref ApiGatewayResourceProd
+      RestApiId: !Ref RestApiProd
+  ############################################
+  ###### API GATEWAY DEPLOYMENT PROD #########
+  ############################################
+  ProdDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethodProd
+    Properties:
+      RestApiId: !Ref RestApiProd
+      Description: Production deployment
+  ############################################
+  ######### API GATEWAY STAGE PROD ###########
+  ############################################
+  Prod:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref ProdDeployment
+      StageName: production
+      Description: Prod Stage
+      RestApiId: !Ref RestApiProd
+      Variables:
+        lambdaAlias: ProdAlias
+        prod_variable: This is stage variable for prod
+  ############################################
+  ############### API GATEWAY ################
+  ############################################
+  ApiGatewayIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: lambda:*
+                Resource:
+                  - !GetAtt LambdaFunctionProd.Arn
+                  - !Ref AliasLambdaFunctionProd
+  ############################################
+  ################## OUT PUT #################
+  ############################################
+Outputs:
+  ProdUrl:
+    Description: URL for Prod endpoint
+    Value: !Sub "https://${RestApiProd}.execute-api.${AWS::Region}.amazonaws.com/production"
+  ###############################################

@@ -21,13 +21,15 @@ Lambda-Proxy
         *******************
         Integration Request 
         *******************
-            - It is the transformation that you can do with API Gateway
+            - It is the transformation that you can do in API Gateway with the incoming request before sending
+              to the back-end
         ********************
         Integration Response
         ********************
-            - This is where, you can assign appropriate status code and do response transformation, if present
+            - This is where, you can assign appropriate status code and do response transformation, to the response
+              coming from the back-end
         *******************
-        Integration Request
+        Method Response
         *******************
-            - It is the part, where you transform the request by using the mapping template defined as per content-type
+            - It is the response going to the client from api-gateway
     
