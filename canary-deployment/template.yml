@@ -137,7 +137,6 @@ Resources:
         Uri: !Sub
           - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}:${!stageVariables.lambdaAlias}/invocations"
           - lambdaArn: !GetAtt LambdaFunctionProd.Arn
-#        Uri: !Join ['', ['arn:aws:apigateway:', !Ref AWS::Region, ':lambda:path/2015-03-31/functions/', !GetAtt LambdaFunctionProd.Arn, '/invocations']]
 #        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionProd.Arn}/invocations
       OperationName: lambdaprod
       ResourceId: !Ref ApiGatewayResourceProd
