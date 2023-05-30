@@ -26,7 +26,7 @@ def lambda_prod(event, context):
             'headers': {'Content-Type': 'application/json'},
             "body": json.dumps({
                 "message": "This is Prod deployment Testing",
-                "messages": "This is version 2 of my function",
+                "messages": "This is version 1 of my function",
                 "stage_variable": variable
             }),
         }

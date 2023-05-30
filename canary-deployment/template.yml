@@ -39,6 +39,7 @@ Resources:
 # Lambda function Version One
   LambdaFunctionProdVersionOne:
     Type: AWS::Lambda::Version
+    DeletionPolicy: Retain
     Properties:
       FunctionName: !Ref LambdaFunctionProd
       Description: v1
@@ -48,6 +49,7 @@ Resources:
 # Lambda function Version Two
   LambdaFunctionProdVersionTwo:
     Type: AWS::Lambda::Version
+    DeletionPolicy: Retain
     Properties:
       FunctionName: !Ref LambdaFunctionProd
       Description: v2
